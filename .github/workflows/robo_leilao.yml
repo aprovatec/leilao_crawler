@@ -24,9 +24,15 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Instalar Navegador Playwright
+        run: |
+          playwright install --with-deps chromium
+
       - name: Executar Varredura
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          ESAJ_CPF: ${{ secrets.ESAJ_CPF }}
+          ESAJ_SENHA: ${{ secrets.ESAJ_SENHA }}
         run: |
           python main.py
