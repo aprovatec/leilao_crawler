@@ -4,8 +4,6 @@ import datetime
 import pandas as pd
 
 # --- IMPORTAÇÕES DO DOWNLOADER E EXTRACTOR ---
-# (Certifique-se de que a função baixar_diario_tjsp existe no seu downloader.py, 
-# se não existir, o try/except garante que o script não vai quebrar)
 from src.downloader import baixar_diario_trt15
 try:
     from src.downloader import baixar_diario_tjsp
@@ -14,9 +12,15 @@ except ImportError:
 
 from src.extractor import analisar_pdf
 
-# --- IMPORTAÇÕES PARA O TJ-SP e NOTIFIER ---
+# --- IMPORTAÇÕES PARA O TJ-SP, CRAWLER E-SAJ e NOTIFIER ---
 from src.extractor_tjsp_prospeccao import extrair_dados_publicacao, salvar_lead_na_planilha
 from src.notifier import enviar_alerta_imediato_tj
+
+# Importa o crawler do e-SAJ com Playwright
+try:
+    from src.crawler_esaj import consultar_processo_esaj
+except ImportError:
+    consultar_processo_esaj = None
 
 
 def obter_data_util():
@@ -30,8 +34,8 @@ def obter_data_util():
 
 
 def executar_rotina_tjsp():
-    """Executa a varredura de prospecção do TJ-SP para arquivos baixados na pasta data/raw."""
-    print("\n[=== INICIANDO ROTINA DE PROSPECÇÃO TJ-SP ===]")
+    """Executa a varredura de prospecção do TJ-SP e consulta o e-SAJ via Playwright."""
+    print("\n[=== INICIANDO ROTINA DE PROSPECÇÃO TJ-SP & E-SAJ ===]")
     
     # 1. Tenta baixar o diário do TJ-SP se a função de download existir
     data_busca = obter_data_util()
@@ -79,20 +83,40 @@ def executar_rotina_tjsp():
             print(f"[X] Não foi possível extrair texto do arquivo: {nome_arquivo}")
             continue
 
-        # Executa o extrator configurado para Campinas e região
+        # Executa o extrator configurado
         dados_capturados = extrair_dados_publicacao(texto_diario_real, comarca="Campinas")
         
         if dados_capturados:
             print("[+] Gatilho comercial encontrado no TJ-SP!")
             
-            # CORREÇÃO: Caminho relativo compatível com Windows e Linux (GitHub Actions)
             caminho_local_leads = os.path.join("data", "leads_leilao.csv")
             
-            # 1. Salva no banco de dados geral
+            # 1. Salva na planilha local de leads
             salvar_lead_na_planilha(dados_capturados, caminho_csv=caminho_local_leads)
             
-            # 2. Envia o e-mail individual em HTML imediatamente
-            enviar_alerta_imediato_tj(dados_capturados)
+            # 2. Se o crawler do e-SAJ estiver disponível, faz a consulta profunda
+            detalhes_esaj = None
+            if consultar_processo_esaj:
+                # Extrai o número do processo se for lista ou dicionário
+                num_proc = None
+                if isinstance(dados_capturados, list) and len(dados_capturados) > 0:
+                    num_proc = dados_capturados[0].get("numero_processo") or dados_capturados[0].get("processo")
+                elif isinstance(dados_capturados, dict):
+                    num_proc = dados_capturados.get("numero_processo") or dados_capturados.get("processo")
+                
+                if num_proc:
+                    print(f"[*] Consultando e-SAJ para obter pasta digital do processo: {num_proc}")
+                    try:
+                        detalhes_esaj = consultar_processo_esaj(num_proc)
+                    except Exception as err:
+                        print(f"[X] Falha na consulta e-SAJ: {err}")
+
+            # 3. Envia o e-mail individual com os dados compilados
+            try:
+                enviar_alerta_imediato_tj(dados_capturados, detalhes_esaj)
+            except TypeError:
+                # Fallback caso seu notifier receba apenas 1 argumento
+                enviar_alerta_imediato_tj(dados_capturados)
         else:
             print(f"[-] Nenhuma homologação de laudo detectada no arquivo: {nome_arquivo}")
 
@@ -156,7 +180,7 @@ def main():
             print("\n[-] Varredura concluída. Nenhuma nova oportunidade detectada no TRT-15.")
 
     # ==========================================
-    # EXECUÇÃO DO TJ-SP EM SEQUÊNCIA
+    # EXECUÇÃO DO TJ-SP & E-SAJ EM SEQUÊNCIA
     # ==========================================
     executar_rotina_tjsp()
 
